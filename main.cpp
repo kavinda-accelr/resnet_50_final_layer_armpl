@@ -176,6 +176,48 @@ void text_samples()
     Timer::Get().print_duration();
 }
 
+void single_frame_benchmark()
+{
+    omp_set_dynamic(0);     // Explicitly disable dynamic teams
+    omp_set_num_threads(3); // Use N threads for all consecutive parallel regions
+
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+
+    uint32_t input_vec_size = 2048;
+    uint32_t num_classes = 1000;
+
+    std::vector<float> bias_vec, bias_vec_results, input_vec, weight_mat, output_vec;
+
+    vector_populator("tensors/example_3/input_vec.txt", input_vec);
+    vector_populator("tensors/example_3/weight_mat.txt", weight_mat);
+    vector_populator("tensors/example_3/bias_vec.txt", bias_vec);
+    vector_populator("tensors/example_3/output_vec.txt", output_vec);
+
+    const int cycles = 100; 
+    for (int cycle = 0; cycle < cycles; cycle++)
+    {
+        bias_vec_results.clear();
+        std::copy(bias_vec.begin(), bias_vec.end(), std::back_inserter(bias_vec_results));
+
+        Timer::Get().start("sgemv");
+        cblas_sgemv(CblasRowMajor, CblasNoTrans, num_classes, input_vec_size, alpha, weight_mat.data(), input_vec_size, input_vec.data(), 1, beta, bias_vec_results.data(), 1);
+        Timer::Get().stop();
+
+        compare_vectors(output_vec, bias_vec_results, 0.000001);
+
+        std::cout << cycle << std::endl;
+    }
+
+    Timer::Get().print_duration();
+
+    /*
+    Time in ms
+    Block name          CPU TIME USED       PROCESS_CPUTIME_ID  MONOTONIC           MONOTONIC_RAW       REALTIME            Cycles              
+    sgemv               20.5468             20.5418             6.85441             6.85426             6.85454             100       
+    */
+}
+
 template <typename T>
 void fill_int_vec(std::vector<T> &vec)
 {
@@ -197,7 +239,7 @@ void fill_float_vec(std::vector<float> &vec)
     }
 }
 
-int main()
+void benchmark_mat()
 {
     omp_set_dynamic(0);     // Explicitly disable dynamic teams
     omp_set_num_threads(3); // Use N threads for all consecutive parallel regions
@@ -252,7 +294,6 @@ int main()
         // Timer::Get().stop();
 
         // Timer::Get().start("argmax");
-        argmax_results.clear();
         for (uint32_t frame = 0; frame < num_frams; frame++)
         {
             float *max_it = std::max_element(bias_mat_results_adds[frame], bias_mat_results_adds[frame] + num_classes);
@@ -260,28 +301,153 @@ int main()
             argmax_results.push_back(max_index);
         }
         // Timer::Get().stop();
-        
+
         Timer::Get().stop();
+
+        std::cout << cycle << std::endl;
     }
 
+    std::cout << argmax_results << std::endl;
     Timer::Get().print_duration();
+
+    /*
+    1400
+    Time in ms
+    Block name          CPU TIME USED       PROCESS_CPUTIME_ID  MONOTONIC           MONOTONIC_RAW       REALTIME            Cycles
+    ALL                 2026.87             2026.87             693.054             693.024             693.054             100
+
+    10
+    Time in ms
+    Block name          CPU TIME USED       PROCESS_CPUTIME_ID  MONOTONIC           MONOTONIC_RAW       REALTIME            Cycles
+    ALL                 93.3457             93.3416             32.5242             32.5236             32.5242             100
+
+    80 frams per 57.8655 ms -> 0.725 ms per frams -> 1379.31 FPS
+    Time in ms
+    Block name          CPU TIME USED       PROCESS_CPUTIME_ID  MONOTONIC           MONOTONIC_RAW       REALTIME            Cycles
+    ALL                 168.48              168.476             57.8653             57.8642             57.8655             100
+    */
+}
+
+void benchmark_vec()
+{
+    omp_set_dynamic(0);     // Explicitly disable dynamic teams
+    omp_set_num_threads(3); // Use N threads for all consecutive parallel regions
+
+    std::mt19937 gen(std::chrono::system_clock::now().time_since_epoch().count());
+    std::uniform_real_distribution<float> dis;
+    const float out_scale = dis(gen) - 0.5f;
+    const float alpha = 1.0f;
+    const float beta = 1.0f;
+
+    uint32_t input_vec_size = 2048;
+    uint32_t num_classes = 1000;
+
+    uint32_t weight_mat_size = input_vec_size * num_classes;
+
+    std::vector<float> bias_vec(num_classes), bias_vec_results(num_classes), weight_mat(weight_mat_size), input_vec(input_vec_size);
+    std::vector<int8_t> input_int_vec(input_vec_size);
+    std::vector<uint32_t> argmax_results;
+
+    fill_float_vec(weight_mat);
+    fill_float_vec(bias_vec);
+
+    int cycles = 100;
+    for (int cycle = 0; cycle < cycles; cycle++)
+    {
+        fill_int_vec(input_int_vec);
+
+        Timer::Get().start("ALL");
+
+        // Timer::Get().start("transform");
+        std::transform(input_int_vec.data(), input_int_vec.data() + input_int_vec.size(), input_vec.data(), [](int8_t x)
+                       { return static_cast<float>(x); });
+        // Timer::Get().stop();
+
+        // Timer::Get().start("scale");
+        cblas_sscal(input_vec.size(), out_scale, input_vec.data(), 1);
+        // Timer::Get().stop();
+
+        // Timer::Get().start("copy");
+        std::copy(bias_vec.data(), bias_vec.data() + bias_vec.size(), bias_vec_results.data());
+        // Timer::Get().stop();
+
+        // Timer::Get().start("sgemm");
+        cblas_sgemv(CblasRowMajor, CblasNoTrans, num_classes, input_vec_size, alpha, weight_mat.data(), input_vec_size, input_vec.data(), 1, beta, bias_vec_results.data(), 1);
+        // Timer::Get().stop();
+
+        // Timer::Get().start("argmax");
+        auto max_it = std::max_element(bias_vec_results.begin(), bias_vec_results.end());
+        int max_index = std::distance(bias_vec_results.begin(), max_it);
+        argmax_results.push_back(max_index);
+        // Timer::Get().stop();
+
+        Timer::Get().stop();
+
+        std::cout << cycle << std::endl;
+    }
+
+    std::cout << argmax_results << std::endl;
+    Timer::Get().print_duration();
+}
+
+int spmat()
+{
+    const uint32_t M = 2;
+    const uint32_t N = 2;
+    /* 1. Set-up local CSR structure */
+    armpl_spmat_t armpl_mat_a, armpl_mat_b, armpl_mat_c;
+    armpl_status_t info;
+    const double alpha = 1.0, beta = 0.0;
+
+    double mat_a[M * N] = {1.0, 2.0, 3.0, 4.0};
+    double mat_b[N * M] = {1.0, 2.0, 3.0, 4.0};
+    double mat_c[M * M] = {0.0, 0.0, 0.0, 0.0};
+
+    /*
+    1 2    1 2
+    3 4  X 3 4 =
+    */
+
+    info = armpl_spmat_create_dense_d(&armpl_mat_a, ARMPL_ROW_MAJOR, M, N, M, mat_a, 0);
+    if (info != ARMPL_STATUS_SUCCESS)
+        printf("ERROR: armpl_spmat_create_dense_d returned %d\n", info);
+
+    info = armpl_spmat_create_dense_d(&armpl_mat_b, ARMPL_ROW_MAJOR, N, M, N, mat_b, 0);
+    if (info != ARMPL_STATUS_SUCCESS)
+        printf("ERROR: armpl_spmat_create_dense_d returned %d\n", info);
+
+    info = armpl_spmat_create_dense_d(&armpl_mat_c, ARMPL_ROW_MAJOR, M, M, M, mat_c, 0);
+    if (info != ARMPL_STATUS_SUCCESS)
+        printf("ERROR: armpl_spmat_create_dense_d returned %d\n", info);
+
+    info = armpl_spmm_exec_d(ARMPL_SPARSE_OPERATION_NOTRANS, ARMPL_SPARSE_OPERATION_NOTRANS,
+                             alpha, armpl_mat_a, armpl_mat_b, beta, armpl_mat_c);
+    if (info != ARMPL_STATUS_SUCCESS)
+        printf("ERROR: armpl_spmm_exec_d returned %d\n", info);
+
+    printf("Computed mat c :\n");
+    for (int i = 0; i < M * M; i++)
+    {
+        printf("\t%2.1f\n", mat_c[i]);
+    }
+
+    info = armpl_spmat_destroy(armpl_mat_a);
+    if (info != ARMPL_STATUS_SUCCESS)
+        printf("ERROR: armpl_spmat_destroy returned %d\n", info);
+
+    info = armpl_spmat_destroy(armpl_mat_b);
+    if (info != ARMPL_STATUS_SUCCESS)
+        printf("ERROR: armpl_spmat_destroy returned %d\n", info);
+
+    info = armpl_spmat_destroy(armpl_mat_c);
+    if (info != ARMPL_STATUS_SUCCESS)
+        printf("ERROR: armpl_spmat_destroy returned %d\n", info);
+
+    return (int)info;
+}
+
+int main()
+{
 
     return 0;
 }
-
-/*
-1400
-Time in ms
-Block name          CPU TIME USED       PROCESS_CPUTIME_ID  MONOTONIC           MONOTONIC_RAW       REALTIME            Cycles              
-ALL                 2026.87             2026.87             693.054             693.024             693.054             100   
-
-10
-Time in ms
-Block name          CPU TIME USED       PROCESS_CPUTIME_ID  MONOTONIC           MONOTONIC_RAW       REALTIME            Cycles              
-ALL                 93.3457             93.3416             32.5242             32.5236             32.5242             100    
-
-80 frams per 57.8655 ms -> 0.725 ms per frams -> 1379.31 FPS
-Time in ms
-Block name          CPU TIME USED       PROCESS_CPUTIME_ID  MONOTONIC           MONOTONIC_RAW       REALTIME            Cycles              
-ALL                 168.48              168.476             57.8653             57.8642             57.8655             100  
-*/
