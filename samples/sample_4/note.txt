@@ -1,0 +1,5 @@
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/arm/armpl_23.04_gcc-12.2/lib
+
+module avail
+export MODULEPATH=$MODULEPATH:/opt/arm/modulefiles/
+module load /opt/arm/modulefiles/armpl/23.04.0_gcc-12.2

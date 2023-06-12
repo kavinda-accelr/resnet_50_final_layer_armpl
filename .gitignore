@@ -1,5 +1,4 @@
 .vscode/
-samples/
 tensors/
 *.out
 *.o

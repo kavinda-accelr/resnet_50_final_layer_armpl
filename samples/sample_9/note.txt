@@ -1,0 +1,2 @@
+module avail
+export MODULEPATH=$MODULEPATH:/opt/arm/modulefiles/;module load acfl/23.04.1;module load gnu/12.2.0;module load armpl/23.04.0_gcc-12.2
