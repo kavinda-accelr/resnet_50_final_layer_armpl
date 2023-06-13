@@ -109,7 +109,7 @@ void compare_vectors(const std::vector<float> &vec1, const std::vector<float> &v
     {
         if (std::abs(vec1[i] - vec2[i]) > delta)
         {
-            std::cerr << "Error: Difference between elements at index " << i << " is greater than delta" << std::endl;
+            std::cerr << "Error: Difference between elements at index " << i << " is greater than delta ["<< vec1[i] << " - " << vec2[i] <<"]"<< std::endl;
             exit(EXIT_FAILURE);
         }
     }
@@ -124,7 +124,7 @@ void text_samples()
     const float beta = 0.0f;
 
     uint32_t input_vec_size = 2048;
-    uint32_t num_frams = 10;
+    uint32_t num_frams = 1;
     uint32_t num_classes = 1000;
 
     std::vector<float> bias_vec, input_vec, weight_mat, output_vec;
@@ -194,7 +194,7 @@ void single_frame_benchmark()
     vector_populator("tensors/example_3/bias_vec.txt", bias_vec);
     vector_populator("tensors/example_3/output_vec.txt", output_vec);
 
-    const int cycles = 100; 
+    const int cycles = 100;
     for (int cycle = 0; cycle < cycles; cycle++)
     {
         bias_vec_results.clear();
@@ -213,8 +213,8 @@ void single_frame_benchmark()
 
     /*
     Time in ms
-    Block name          CPU TIME USED       PROCESS_CPUTIME_ID  MONOTONIC           MONOTONIC_RAW       REALTIME            Cycles              
-    sgemv               20.5468             20.5418             6.85441             6.85426             6.85454             100       
+    Block name          CPU TIME USED       PROCESS_CPUTIME_ID  MONOTONIC           MONOTONIC_RAW       REALTIME            Cycles
+    sgemv               20.5468             20.5418             6.85441             6.85426             6.85454             100
     */
 }
 
@@ -397,11 +397,11 @@ int spmat()
     /* 1. Set-up local CSR structure */
     armpl_spmat_t armpl_mat_a, armpl_mat_b, armpl_mat_c;
     armpl_status_t info;
-    const double alpha = 1.0, beta = 0.0;
+    const double alpha = 1.0, beta = 1.0;
 
     double mat_a[M * N] = {1.0, 2.0, 3.0, 4.0};
     double mat_b[N * M] = {1.0, 2.0, 3.0, 4.0};
-    double mat_c[M * M] = {0.0, 0.0, 0.0, 0.0};
+    double mat_c[M * M] = {1.0, 2.0, 3.0, 4.0};
 
     /*
     1 2    1 2
@@ -420,15 +420,40 @@ int spmat()
     if (info != ARMPL_STATUS_SUCCESS)
         printf("ERROR: armpl_spmat_create_dense_d returned %d\n", info);
 
+    info = armpl_spmv_optimize(armpl_mat_a);
+    if (info != ARMPL_STATUS_SUCCESS)
+        printf("ERROR: armpl_spmv_optimize returned %d\n", info);
+
+    info = armpl_spmv_optimize(armpl_mat_b);
+    if (info != ARMPL_STATUS_SUCCESS)
+        printf("ERROR: armpl_spmv_optimize returned %d\n", info);
+
+    info = armpl_spmv_optimize(armpl_mat_c);
+    if (info != ARMPL_STATUS_SUCCESS)
+        printf("ERROR: armpl_spmv_optimize returned %d\n", info);
+
     info = armpl_spmm_exec_d(ARMPL_SPARSE_OPERATION_NOTRANS, ARMPL_SPARSE_OPERATION_NOTRANS,
                              alpha, armpl_mat_a, armpl_mat_b, beta, armpl_mat_c);
     if (info != ARMPL_STATUS_SUCCESS)
         printf("ERROR: armpl_spmm_exec_d returned %d\n", info);
 
+    armpl_int_t ARM_M = 2;
+    double row_1[M];
+    double row_2[M];
+    double *results[M] = {row_1, row_2};
+    info = armpl_spmat_export_dense_d(armpl_mat_c, ARMPL_ROW_MAJOR, &ARM_M, &ARM_M, results);
+    if (info != ARMPL_STATUS_SUCCESS)
+        printf("ERROR: armpl_spmat_export_dense_d returned %d\n", info);
+
     printf("Computed mat c :\n");
-    for (int i = 0; i < M * M; i++)
+    for (uint32_t i = 0; i < M; i++)
     {
-        printf("\t%2.1f\n", mat_c[i]);
+        printf("\t%2.1f\n", row_1[i]);
+    }
+
+    for (uint32_t i = 0; i < M; i++)
+    {
+        printf("\t%2.1f\n", row_2[i]);
     }
 
     info = armpl_spmat_destroy(armpl_mat_a);
@@ -448,6 +473,38 @@ int spmat()
 
 int main()
 {
+    omp_set_dynamic(0);     // Explicitly disable dynamic teams
+    omp_set_num_threads(3); // Use N threads for all consecutive parallel regions
+
+    const float alpha = 1.0f;
+    const float beta = 1.0f;
+
+    uint32_t input_vec_size = 2048;
+    uint32_t num_classes = 1000;
+
+    std::vector<float> bias_vec, bias_vec_results, input_vec, weight_mat, output_vec;
+
+    vector_populator("tensors/example_4/input_vec.txt", input_vec);
+    vector_populator("tensors/example_4/weight_mat.txt", weight_mat);
+    vector_populator("tensors/example_4/bias_vec.txt", bias_vec);
+    vector_populator("tensors/example_4/output_vec.txt", output_vec);
+
+    const int cycles = 100;
+    for (int cycle = 0; cycle < cycles; cycle++)
+    {
+        bias_vec_results.clear();
+        std::copy(bias_vec.begin(), bias_vec.end(), std::back_inserter(bias_vec_results));
+
+        Timer::Get().start("sgemv");
+        cblas_sgemv(CblasRowMajor, CblasNoTrans, num_classes, input_vec_size, alpha, weight_mat.data(), input_vec_size, input_vec.data(), 1, beta, bias_vec_results.data(), 1);
+        Timer::Get().stop();
+
+        compare_vectors(output_vec, bias_vec_results, 0.00001);
+
+        std::cout << cycle << std::endl;
+    }
+
+    Timer::Get().print_duration();
 
     return 0;
 }
